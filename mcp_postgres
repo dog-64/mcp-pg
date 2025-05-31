@@ -70,10 +70,15 @@ execute_sql() {
         return 1
     fi
     
-    # Проверяем на небезопасные операции
-    if echo "$query" | grep -iq '\b\(INSERT\|UPDATE\|DELETE\|DROP\|CREATE\|ALTER\|TRUNCATE\)\b'; then
-        echo "Разрешены только SELECT запросы"
-        return 1
+    # Проверяем режим безопасности для конкретного подключения
+    local readonly_var="DB_${connection_upper}_READONLY"
+    local readonly_mode=$(eval echo \$$readonly_var)
+    
+    if [ "$readonly_mode" = "true" ]; then
+        if echo "$query" | grep -iq '\b\(INSERT\|UPDATE\|DELETE\|DROP\|CREATE\|ALTER\|TRUNCATE\)\b'; then
+            echo "READONLY режим для $connection: разрешены только SELECT запросы"
+            return 1
+        fi
     fi
     
     # Выполняем запрос
@@ -126,14 +131,21 @@ while IFS= read -r line; do
     
     case "$method" in
         "initialize")
-            send_response "{\"jsonrpc\":\"2.0\",\"id\":$json_id,\"result\":{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{\"tools\":{}},\"serverInfo\":{\"name\":\"mcp-postgres-bash\",\"version\":\"1.0.0\"}}}"
+            send_response "{\"jsonrpc\":\"2.0\",\"id\":$json_id,\"result\":{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{\"tools\":{}},\"serverInfo\":{\"name\":\"mcp-postgres-bash\",\"version\":\"1.0.0\",\"description\":\"PostgreSQL MCP server на bash + psql. Поддерживает множественные подключения, безопасные SELECT запросы, без зависимостей.\"}}}"
             ;;
         "notifications/initialized")
             # Уведомление о том, что клиент инициализирован - ответ не требуется
             log "Client initialized notification received"
             ;;
         "tools/list")
-            send_response "{\"jsonrpc\":\"2.0\",\"id\":$json_id,\"result\":{\"tools\":[{\"name\":\"execute_sql\",\"description\":\"Выполнить SQL запрос через psql\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"connection\":{\"type\":\"string\",\"description\":\"Имя соединения\"},\"database\":{\"type\":\"string\",\"description\":\"Имя базы данных (опционально)\"},\"query\":{\"type\":\"string\",\"description\":\"SQL запрос\"}},\"required\":[\"connection\",\"query\"]}},{\"name\":\"check_connection\",\"description\":\"Проверить подключение\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"connection\":{\"type\":\"string\",\"description\":\"Имя соединения\"},\"database\":{\"type\":\"string\",\"description\":\"Имя базы данных (опционально)\"}},\"required\":[\"connection\"]}}]}}"
+            # Определяем статус безопасности для каждого подключения
+            local_readonly=$(eval echo \$DB_LOCAL_READONLY)
+            docker_readonly=$(eval echo \$DB_DOCKER_READONLY) 
+            prod_readonly=$(eval echo \$DB_PROD_READONLY)
+            
+            security_desc="Режимы безопасности: local=$([ "$local_readonly" = "true" ] && echo "READONLY" || echo "FULL"), docker=$([ "$docker_readonly" = "true" ] && echo "READONLY" || echo "FULL"), prod=$([ "$prod_readonly" = "true" ] && echo "READONLY" || echo "FULL")."
+            
+            send_response "{\"jsonrpc\":\"2.0\",\"id\":$json_id,\"result\":{\"tools\":[{\"name\":\"execute_sql\",\"description\":\"Выполнить SQL запрос через psql. $security_desc Использует нативный psql клиент PostgreSQL 16.0+. Реализация на bash без зависимостей - быстрая и надёжная.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"connection\":{\"type\":\"string\",\"description\":\"Имя соединения (local, docker, prod)\"},\"database\":{\"type\":\"string\",\"description\":\"Имя базы данных (опционально, переопределяет значение по умолчанию из .env)\"},\"query\":{\"type\":\"string\",\"description\":\"SQL запрос (поддерживается стандартный синтаксис PostgreSQL)\"}},\"required\":[\"connection\",\"query\"]}},{\"name\":\"check_connection\",\"description\":\"Проверить подключение к PostgreSQL серверу. Тестирует доступность сервера и базы данных через psql.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"connection\":{\"type\":\"string\",\"description\":\"Имя соединения (local, docker, prod)\"},\"database\":{\"type\":\"string\",\"description\":\"Имя базы данных для проверки (опционально)\"}},\"required\":[\"connection\"]}}]}}"
             ;;
         "tools/call")
             # Извлекаем имя инструмента и аргументы

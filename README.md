@@ -37,32 +37,39 @@ cp env.example .env
 Cursor автоматически поймёт из вашего запроса, с какой базой работать!
 
 ## Конфигурация
-Нужно хотя бы одно подключение:
+
+Каждое подключение настраивается отдельно с собственными правами доступа:
+
 ```env
-# Основное подключение (база передается параметром)
-DB_LOCAL_HOST=localhost
-DB_LOCAL_PORT=5432  
-DB_LOCAL_NAME=postgres  # база по умолчанию
-DB_LOCAL_USER=postgres
-DB_LOCAL_PASSWORD=password
-```
-Но их может быть и несколько:
-```
-# Основное подключение
+# Локальное подключение (разработка)
 DB_LOCAL_HOST=localhost
 DB_LOCAL_PORT=5432
 DB_LOCAL_NAME=postgres
 DB_LOCAL_USER=postgres
+DB_LOCAL_PASSWORD=password
+DB_LOCAL_READONLY=false  # полный доступ для разработки
 
+# Docker подключение (тестирование)
 DB_DOCKER_HOST=0.0.0.0
 DB_DOCKER_PORT=15432
-DB_DOCKER_NAME=db1
+DB_DOCKER_NAME=insales_dev
 DB_DOCKER_USER=postgres
+DB_DOCKER_PASSWORD=password
+DB_DOCKER_READONLY=true  # только чтение для безопасности
+
+# Продакшен подключение (боевой сервер)
+DB_PROD_HOST=your-prod-server.com
+DB_PROD_PORT=5432
+DB_PROD_NAME=production_db
+DB_PROD_USER=postgres
+DB_PROD_PASSWORD=your-password
+DB_PROD_READONLY=true  # только чтение для безопасности
 ```
 
 ## Возможности
 
-- **Выполнение SQL запросов** (только SELECT для безопасности)
+- **Выполнение SQL запросов** (с настраиваемой безопасностью)
+- **READONLY режим** для безопасного доступа к продакшену
 - **Проверка подключений** к разным серверам
 - **Переключение между базами данных** без перезапуска
 - **Множественные подключения** (local, docker, prod)
