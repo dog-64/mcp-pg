@@ -1,0 +1,169 @@
+#!/bin/bash
+
+# MCP PostgreSQL Server на bash + psql
+
+# Функция для загрузки переменных из .env файла
+load_env() {
+    if [ -f .env ]; then
+        # Читаем .env файл и экспортируем переменные
+        while IFS='=' read -r key value; do
+            # Пропускаем комментарии и пустые строки
+            [[ -z "$key" || "$key" =~ ^[[:space:]]*# ]] && continue
+            
+            # Убираем пробелы и кавычки
+            key=$(echo "$key" | xargs)
+            value=$(echo "$value" | xargs | sed 's/^["'\'']\|["'\'']$//g')
+            
+            # Экспортируем переменную
+            export "$key"="$value"
+        done < .env
+    fi
+}
+
+# Загружаем переменные окружения
+load_env
+
+# Функция для логирования
+log() {
+    echo "$1" >&2
+}
+
+# Функция для отправки JSON ответа
+send_response() {
+    echo "$1"
+}
+
+# Функция для выполнения SQL
+execute_sql() {
+    local connection="$1"
+    local query="$2"
+    
+    # Получаем параметры подключения (приводим к верхнему регистру)
+    local connection_upper=$(echo "$connection" | tr '[:lower:]' '[:upper:]')
+    
+    local host_var="DB_${connection_upper}_HOST"
+    local port_var="DB_${connection_upper}_PORT"
+    local name_var="DB_${connection_upper}_NAME"
+    local user_var="DB_${connection_upper}_USER"
+    local pass_var="DB_${connection_upper}_PASSWORD"
+    
+    # Используем eval для получения значений переменных
+    local host=$(eval echo \$$host_var)
+    local port=$(eval echo \$$port_var)
+    local dbname=$(eval echo \$$name_var)
+    local user=$(eval echo \$$user_var)
+    local password=$(eval echo \$$pass_var)
+    
+    # Устанавливаем порт по умолчанию
+    [ -z "$port" ] && port="5432"
+    
+    log "Подключение $connection: host=$host, port=$port, db=$dbname, user=$user"
+    
+    if [ -z "$host" ] || [ -z "$dbname" ] || [ -z "$user" ]; then
+        echo "Соединение '$connection' не настроено (отсутствуют host/db/user)"
+        return 1
+    fi
+    
+    # Проверяем на небезопасные операции
+    if echo "$query" | grep -iq '\b\(INSERT\|UPDATE\|DELETE\|DROP\|CREATE\|ALTER\|TRUNCATE\)\b'; then
+        echo "Разрешены только SELECT запросы"
+        return 1
+    fi
+    
+    # Выполняем запрос
+    if [ -n "$password" ]; then
+        PGPASSWORD="$password" psql -h "$host" -p "$port" -U "$user" -d "$dbname" -t -A -c "$query" 2>&1
+    else
+        psql -h "$host" -p "$port" -U "$user" -d "$dbname" -t -A -c "$query" 2>&1
+    fi
+}
+
+# Функция для проверки соединения
+check_connection() {
+    local connection="$1"
+    local result
+    result=$(execute_sql "$connection" "SELECT version(), current_database(), current_user")
+    
+    if [ $? -eq 0 ]; then
+        echo "ok"
+    else
+        echo "error: $result"
+    fi
+}
+
+log "MCP PostgreSQL Server started"
+
+# Основной цикл обработки запросов
+while IFS= read -r line; do
+    [ -z "$line" ] && break
+    
+    # Простой парсинг JSON для получения method и id
+    method=$(echo "$line" | sed -n 's/.*"method"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+    id=$(echo "$line" | sed -n 's/.*"id"[[:space:]]*:[[:space:]]*\([^,}]*\).*/\1/p')
+    
+    # Очищаем ID от лишних пробелов
+    id=$(echo "$id" | sed 's/^[[:space:]]*\(.*\)[[:space:]]*$/\1/')
+    
+    # Определяем тип ID и формируем правильное значение для JSON
+    if [ -z "$id" ] || [ "$id" = "null" ]; then
+        id="1"
+        json_id="$id"
+    elif echo "$id" | grep -q '^".*"$'; then
+        # Строковый ID - оставляем кавычки
+        json_id="$id"
+        id=$(echo "$id" | sed 's/^"\(.*\)"$/\1/')
+    else
+        # Числовой ID - без кавычек, очищаем от пробелов
+        json_id="$id"
+    fi
+    
+    case "$method" in
+        "initialize")
+            send_response "{\"jsonrpc\":\"2.0\",\"id\":$json_id,\"result\":{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{\"tools\":{}},\"serverInfo\":{\"name\":\"mcp-postgres-bash\",\"version\":\"1.0.0\"}}}"
+            ;;
+        "notifications/initialized")
+            # Уведомление о том, что клиент инициализирован - ответ не требуется
+            log "Client initialized notification received"
+            ;;
+        "tools/list")
+            send_response "{\"jsonrpc\":\"2.0\",\"id\":$json_id,\"result\":{\"tools\":[{\"name\":\"execute_sql\",\"description\":\"Выполнить SQL запрос через psql\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"connection\":{\"type\":\"string\",\"description\":\"Имя соединения\"},\"query\":{\"type\":\"string\",\"description\":\"SQL запрос\"}},\"required\":[\"connection\",\"query\"]}},{\"name\":\"check_connection\",\"description\":\"Проверить подключение\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"connection\":{\"type\":\"string\",\"description\":\"Имя соединения\"}},\"required\":[\"connection\"]}}]}}"
+            ;;
+        "tools/call")
+            # Извлекаем имя инструмента и аргументы
+            tool_name=$(echo "$line" | sed -n 's/.*"name":"\([^"]*\)".*/\1/p')
+            connection=$(echo "$line" | sed -n 's/.*"connection":"\([^"]*\)".*/\1/p')
+            
+            case "$tool_name" in
+                "execute_sql")
+                    query=$(echo "$line" | sed -n 's/.*"query":"\([^"]*\)".*/\1/p')
+                    result=$(execute_sql "$connection" "$query")
+                    if [ $? -eq 0 ]; then
+                        # Экранируем результат для JSON
+                        escaped_result=$(echo "$result" | sed 's/\\/\\\\/g' | sed 's/"/\\"/g' | tr '\n' '|' | sed 's/|$//')
+                        send_response "{\"jsonrpc\":\"2.0\",\"id\":$json_id,\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"$escaped_result\"}]}}"
+                    else
+                        escaped_error=$(echo "$result" | sed 's/\\/\\\\/g' | sed 's/"/\\"/g')
+                        send_response "{\"jsonrpc\":\"2.0\",\"id\":$json_id,\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"❌ Ошибка: $escaped_error\"}]}}"
+                    fi
+                    ;;
+                "check_connection")
+                    result=$(check_connection "$connection")
+                    if [[ "$result" == "ok" ]]; then
+                        send_response "{\"jsonrpc\":\"2.0\",\"id\":$json_id,\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"✅ Соединение работает\"}]}}"
+                    else
+                        escaped_error=$(echo "$result" | sed 's/\\/\\\\/g' | sed 's/"/\\"/g')
+                        send_response "{\"jsonrpc\":\"2.0\",\"id\":$json_id,\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"❌ $escaped_error\"}]}}"
+                    fi
+                    ;;
+                *)
+                    send_response "{\"jsonrpc\":\"2.0\",\"id\":$json_id,\"error\":{\"code\":-32601,\"message\":\"Unknown tool: $tool_name\"}}"
+                    ;;
+            esac
+            ;;
+        *)
+            if [ -n "$method" ]; then
+                send_response "{\"jsonrpc\":\"2.0\",\"id\":$json_id,\"error\":{\"code\":-32601,\"message\":\"Method not found: $method\"}}"
+            fi
+            ;;
+    esac
+done 
