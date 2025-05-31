@@ -37,6 +37,7 @@ send_response() {
 execute_sql() {
     local connection="$1"
     local query="$2"
+    local database="$3"
     
     # Получаем параметры подключения (приводим к верхнему регистру)
     local connection_upper=$(echo "$connection" | tr '[:lower:]' '[:upper:]')
@@ -53,6 +54,11 @@ execute_sql() {
     local dbname=$(eval echo \$$name_var)
     local user=$(eval echo \$$user_var)
     local password=$(eval echo \$$pass_var)
+    
+    # Если передана database, используем её вместо настройки из .env
+    if [ -n "$database" ]; then
+        dbname="$database"
+    fi
     
     # Устанавливаем порт по умолчанию
     [ -z "$port" ] && port="5432"
@@ -81,8 +87,9 @@ execute_sql() {
 # Функция для проверки соединения
 check_connection() {
     local connection="$1"
+    local database="$2"  # Новый параметр для базы данных
     local result
-    result=$(execute_sql "$connection" "SELECT version(), current_database(), current_user")
+    result=$(execute_sql "$connection" "SELECT version(), current_database(), current_user" "$database")
     
     if [ $? -eq 0 ]; then
         echo "ok"
@@ -126,32 +133,35 @@ while IFS= read -r line; do
             log "Client initialized notification received"
             ;;
         "tools/list")
-            send_response "{\"jsonrpc\":\"2.0\",\"id\":$json_id,\"result\":{\"tools\":[{\"name\":\"execute_sql\",\"description\":\"Выполнить SQL запрос через psql\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"connection\":{\"type\":\"string\",\"description\":\"Имя соединения\"},\"query\":{\"type\":\"string\",\"description\":\"SQL запрос\"}},\"required\":[\"connection\",\"query\"]}},{\"name\":\"check_connection\",\"description\":\"Проверить подключение\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"connection\":{\"type\":\"string\",\"description\":\"Имя соединения\"}},\"required\":[\"connection\"]}}]}}"
+            send_response "{\"jsonrpc\":\"2.0\",\"id\":$json_id,\"result\":{\"tools\":[{\"name\":\"execute_sql\",\"description\":\"Выполнить SQL запрос через psql\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"connection\":{\"type\":\"string\",\"description\":\"Имя соединения\"},\"database\":{\"type\":\"string\",\"description\":\"Имя базы данных (опционально)\"},\"query\":{\"type\":\"string\",\"description\":\"SQL запрос\"}},\"required\":[\"connection\",\"query\"]}},{\"name\":\"check_connection\",\"description\":\"Проверить подключение\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"connection\":{\"type\":\"string\",\"description\":\"Имя соединения\"},\"database\":{\"type\":\"string\",\"description\":\"Имя базы данных (опционально)\"}},\"required\":[\"connection\"]}}]}}"
             ;;
         "tools/call")
             # Извлекаем имя инструмента и аргументы
             tool_name=$(echo "$line" | sed -n 's/.*"name":"\([^"]*\)".*/\1/p')
             connection=$(echo "$line" | sed -n 's/.*"connection":"\([^"]*\)".*/\1/p')
+            database=$(echo "$line" | sed -n 's/.*"database":"\([^"]*\)".*/\1/p')
             
             case "$tool_name" in
                 "execute_sql")
                     query=$(echo "$line" | sed -n 's/.*"query":"\([^"]*\)".*/\1/p')
-                    result=$(execute_sql "$connection" "$query")
+                    result=$(execute_sql "$connection" "$query" "$database")
                     if [ $? -eq 0 ]; then
-                        # Экранируем результат для JSON
-                        escaped_result=$(echo "$result" | sed 's/\\/\\\\/g' | sed 's/"/\\"/g' | tr '\n' '|' | sed 's/|$//')
+                        # Улучшенное экранирование результата для JSON
+                        escaped_result=$(echo "$result" | sed 's/\\/\\\\/g' | sed 's/"/\\"/g' | sed 's/\t/\\t/g' | sed 's/\r/\\r/g' | tr '\n' '|' | sed 's/|$//')
                         send_response "{\"jsonrpc\":\"2.0\",\"id\":$json_id,\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"$escaped_result\"}]}}"
                     else
-                        escaped_error=$(echo "$result" | sed 's/\\/\\\\/g' | sed 's/"/\\"/g')
+                        # Улучшенное экранирование ошибок для JSON
+                        escaped_error=$(echo "$result" | sed 's/\\/\\\\/g' | sed 's/"/\\"/g' | sed 's/\t/\\t/g' | sed 's/\r/\\r/g' | tr '\n' ' ' | sed 's/  */ /g' | sed 's/^ *//' | sed 's/ *$//')
                         send_response "{\"jsonrpc\":\"2.0\",\"id\":$json_id,\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"❌ Ошибка: $escaped_error\"}]}}"
                     fi
                     ;;
                 "check_connection")
-                    result=$(check_connection "$connection")
+                    result=$(check_connection "$connection" "$database")
                     if [[ "$result" == "ok" ]]; then
                         send_response "{\"jsonrpc\":\"2.0\",\"id\":$json_id,\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"✅ Соединение работает\"}]}}"
                     else
-                        escaped_error=$(echo "$result" | sed 's/\\/\\\\/g' | sed 's/"/\\"/g')
+                        # Улучшенное экранирование ошибок для JSON
+                        escaped_error=$(echo "$result" | sed 's/\\/\\\\/g' | sed 's/"/\\"/g' | sed 's/\t/\\t/g' | sed 's/\r/\\r/g' | tr '\n' ' ' | sed 's/  */ /g' | sed 's/^ *//' | sed 's/ *$//')
                         send_response "{\"jsonrpc\":\"2.0\",\"id\":$json_id,\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"❌ $escaped_error\"}]}}"
                     fi
                     ;;

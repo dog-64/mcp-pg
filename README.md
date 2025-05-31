@@ -11,35 +11,61 @@ cp env.example .env
 ```
 
 2. **Добавьте в Cursor:**
-Скопируйте содержимое `mcp_postgres.json` в настройки MCP серверов Cursor.
+```json
+{
+  "mcpServers": {
+    "postgres": {
+      "command": "/Users/dog/Sites/mcp-pg/run_mcp.sh"
+    }
+  }
+}
+```
+путь должен быть абсолютными
 
 ## Использование
 
-После настройки можете писать в Cursor:
 
-- "Выполни на local: SELECT * FROM users LIMIT 5"
-- "Проверь соединение с local базой"
-- "Покажи таблицы: SELECT tablename FROM pg_tables WHERE schemaname='public'"
+Теперь можете работать с любой базой данных, просто указав её название в запросе.
+
+**Примеры команд в Cursor:**
+- "какая самая большая таблица в БД o3?"
+- "какие БД есть на текущем соединении?"
+- "покажи владельцев таблиц в db1"
+- "выполни в базе insales: SELECT count(*) FROM users"
+- "переключись на БД metabase и покажи таблицы"
+
+Cursor автоматически поймёт из вашего запроса, с какой базой работать!
 
 ## Конфигурация
-
-В `.env` файле настройте подключения:
-
+Нужно хотя бы одно подключение:
 ```env
-# Для каждой базы добавьте блок вида:
-DB_ИМЯ_HOST=адрес
-DB_ИМЯ_PORT=порт  
-DB_ИМЯ_NAME=база
-DB_ИМЯ_USER=пользователь
-DB_ИМЯ_PASSWORD=пароль
+# Основное подключение (база передается параметром)
+DB_LOCAL_HOST=localhost
+DB_LOCAL_PORT=5432  
+DB_LOCAL_NAME=postgres  # база по умолчанию
+DB_LOCAL_USER=postgres
+DB_LOCAL_PASSWORD=password
+```
+Но их может быть и несколько:
+```
+# Основное подключение
+DB_LOCAL_HOST=localhost
+DB_LOCAL_PORT=5432
+DB_LOCAL_NAME=postgres
+DB_LOCAL_USER=postgres
+
+DB_DOCKER_HOST=0.0.0.0
+DB_DOCKER_PORT=15432
+DB_DOCKER_NAME=db1
+DB_DOCKER_USER=postgres
 ```
 
-Поддерживается любое количество подключений.
+## Возможности
 
-## Команды
-
-- `execute_sql` - выполнить SQL запрос (только SELECT)
-- `check_connection` - проверить подключение
+- **Выполнение SQL запросов** (только SELECT для безопасности)
+- **Проверка подключений** к разным серверам
+- **Переключение между базами данных** без перезапуска
+- **Множественные подключения** (local, docker, prod)
 
 ## Устранение проблем
 
@@ -55,8 +81,10 @@ echo '{"method":"tools/list","id":1}' | ./mcp_postgres
 which psql
 ```
 
-3. **Проверьте пути в mcp_postgres.json** - они должны быть абсолютными
+3. **Проверьте пути в настройках Cursor** - они должны быть абсолютными
 
-4. **Перезапустите Cursor** после изменения конфигурации
+4. **Смотрите лог** - View / Output - MCP output
+
+5. **Перезапустите Cursor** после изменения конфигурации
 
 Никаких зависимостей, только bash + psql!
