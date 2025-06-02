@@ -43,6 +43,46 @@ send_response() {
     echo "$1"
 }
 
+# Функция для создания успешного ответа с текстом
+send_success_response() {
+    local id="$1"
+    local text="$2"
+    cat <<EOF
+{
+  "jsonrpc": "2.0",
+  "id": $id,
+  "result": {
+    "content": [
+      {
+        "type": "text",
+        "text": "$text"
+      }
+    ]
+  }
+}
+EOF
+}
+
+# Функция для создания ответа с ошибкой
+send_error_response() {
+    local id="$1"
+    local error_text="$2"
+    cat <<EOF
+{
+  "jsonrpc": "2.0",
+  "id": $id,
+  "result": {
+    "content": [
+      {
+        "type": "text",
+        "text": "❌ $error_text"
+      }
+    ]
+  }
+}
+EOF
+}
+
 # Функция для выполнения SQL
 execute_sql() {
     local connection="$1"
@@ -178,7 +218,24 @@ while IFS= read -r line; do
     
     case "$method" in
         "initialize")
-            send_response "{\"jsonrpc\":\"2.0\",\"id\":$json_id,\"result\":{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{\"tools\":{}},\"serverInfo\":{\"name\":\"mcp-postgres-bash\",\"version\":\"1.0.0\",\"description\":\"PostgreSQL MCP server на bash + psql. Поддерживает множественные подключения, безопасные SELECT запросы, без зависимостей.\"}}}"
+            # Ответ на инициализацию MCP сервера
+            cat <<EOF
+{
+  "jsonrpc": "2.0",
+  "id": $json_id,
+  "result": {
+    "protocolVersion": "2024-11-05",
+    "capabilities": {
+      "tools": {}
+    },
+    "serverInfo": {
+      "name": "mcp-postgres-bash",
+      "version": "1.0.0",
+      "description": "PostgreSQL MCP server на bash + psql. Поддерживает множественные подключения, безопасные SELECT запросы, без зависимостей."
+    }
+  }
+}
+EOF
             ;;
         "notifications/initialized")
             # Уведомление о том, что клиент инициализирован - ответ не требуется
@@ -192,7 +249,79 @@ while IFS= read -r line; do
             
             security_desc="Режимы безопасности: local=$([ "$local_readonly" = "true" ] && echo "READONLY" || echo "FULL"), docker=$([ "$docker_readonly" = "true" ] && echo "READONLY" || echo "FULL"), prod=$([ "$prod_readonly" = "true" ] && echo "READONLY" || echo "FULL")."
             
-            send_response "{\"jsonrpc\":\"2.0\",\"id\":$json_id,\"result\":{\"tools\":[{\"name\":\"execute_sql\",\"description\":\"Выполнить SQL запрос через psql. $security_desc Использует нативный psql клиент PostgreSQL 16.0+. Реализация на bash без зависимостей - быстрая и надёжная.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"connection\":{\"type\":\"string\",\"description\":\"Имя соединения (local, docker, prod)\"},\"database\":{\"type\":\"string\",\"description\":\"Имя базы данных (опционально, переопределяет значение по умолчанию из .env)\"},\"query\":{\"type\":\"string\",\"description\":\"SQL запрос (поддерживается стандартный синтаксис PostgreSQL)\"}},\"required\":[\"connection\",\"query\"]}},{\"name\":\"check_connection\",\"description\":\"Проверить подключение к PostgreSQL серверу. Тестирует доступность сервера и базы данных через psql.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"connection\":{\"type\":\"string\",\"description\":\"Имя соединения (local, docker, prod)\"},\"database\":{\"type\":\"string\",\"description\":\"Имя базы данных для проверки (опционально)\"}},\"required\":[\"connection\"]}},{\"name\":\"count_table_rows\",\"description\":\"Быстрый подсчет строк в таблице через системный каталог PostgreSQL (pg_catalog.pg_class). Возвращает приблизительное количество строк - значительно быстрее чем COUNT(*) для больших таблиц. Использует reltuples для оценки. Для точного подсчета рекомендуется предварительно выполнить ANALYZE table_name для обновления статистики.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"connection\":{\"type\":\"string\",\"description\":\"Имя соединения (local, docker, prod)\"},\"table_name\":{\"type\":\"string\",\"description\":\"Имя таблицы для подсчета строк\"},\"database\":{\"type\":\"string\",\"description\":\"Имя базы данных (опционально)\"}},\"required\":[\"connection\",\"table_name\"]}}]}}"
+            # Генерируем читаемый JSON ответ с инструментами
+            cat <<EOF
+{
+  "jsonrpc": "2.0",
+  "id": $json_id,
+  "result": {
+    "tools": [
+      {
+        "name": "execute_sql",
+        "description": "Выполнить SQL запрос через psql. $security_desc Использует нативный psql клиент PostgreSQL 16.0+. Реализация на bash без зависимостей - быстрая и надёжная.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "connection": {
+              "type": "string",
+              "description": "Имя соединения (local, docker, prod)"
+            },
+            "database": {
+              "type": "string", 
+              "description": "Имя базы данных (опционально, переопределяет значение по умолчанию из .env)"
+            },
+            "query": {
+              "type": "string",
+              "description": "SQL запрос (поддерживается стандартный синтаксис PostgreSQL)"
+            }
+          },
+          "required": ["connection", "query"]
+        }
+      },
+      {
+        "name": "check_connection",
+        "description": "Проверить подключение к PostgreSQL серверу. Тестирует доступность сервера и базы данных через psql.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "connection": {
+              "type": "string",
+              "description": "Имя соединения (local, docker, prod)"
+            },
+            "database": {
+              "type": "string",
+              "description": "Имя базы данных для проверки (опционально)"
+            }
+          },
+          "required": ["connection"]
+        }
+      },
+      {
+        "name": "count_table_rows",
+        "description": "Быстрый подсчет строк в таблице через системный каталог PostgreSQL (pg_catalog.pg_class). Возвращает приблизительное количество строк - значительно быстрее чем COUNT(*) для больших таблиц. Использует reltuples для оценки. Для точного подсчета рекомендуется предварительно выполнить ANALYZE table_name для обновления статистики.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "connection": {
+              "type": "string",
+              "description": "Имя соединения (local, docker, prod)"
+            },
+            "table_name": {
+              "type": "string",
+              "description": "Имя таблицы для подсчета строк"
+            },
+            "database": {
+              "type": "string",
+              "description": "Имя базы данных (опционально)"
+            }
+          },
+          "required": ["connection", "table_name"]
+        }
+      }
+    ]
+  }
+}
+EOF
             ;;
         "tools/call")
             # Извлекаем имя инструмента и аргументы
@@ -208,41 +337,66 @@ while IFS= read -r line; do
                     if [ $? -eq 0 ]; then
                         # Улучшенное экранирование результата для JSON
                         escaped_result=$(echo "$result" | sed 's/\\/\\\\/g' | sed 's/"/\\"/g' | sed 's/\t/\\t/g' | sed 's/\r/\\r/g' | tr '\n' '|' | sed 's/|$//')
-                        send_response "{\"jsonrpc\":\"2.0\",\"id\":$json_id,\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"$escaped_result\"}]}}"
+                        send_success_response "$json_id" "$escaped_result"
                     else
                         # Улучшенное экранирование ошибок для JSON
                         escaped_error=$(echo "$result" | sed 's/\\/\\\\/g' | sed 's/"/\\"/g' | sed 's/\t/\\t/g' | sed 's/\r/\\r/g' | tr '\n' ' ' | sed 's/  */ /g' | sed 's/^ *//' | sed 's/ *$//')
-                        send_response "{\"jsonrpc\":\"2.0\",\"id\":$json_id,\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"❌ Ошибка: $escaped_error\"}]}}"
+                        send_error_response "$json_id" "Ошибка: $escaped_error"
                     fi
                     ;;
                 "check_connection")
                     result=$(check_connection "$connection" "$database")
                     if [[ "$result" == "ok" ]]; then
-                        send_response "{\"jsonrpc\":\"2.0\",\"id\":$json_id,\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"✅ Соединение работает\"}]}}"
+                        send_success_response "$json_id" "✅ Соединение работает"
                     else
                         # Улучшенное экранирование ошибок для JSON
                         escaped_error=$(echo "$result" | sed 's/\\/\\\\/g' | sed 's/"/\\"/g' | sed 's/\t/\\t/g' | sed 's/\r/\\r/g' | tr '\n' ' ' | sed 's/  */ /g' | sed 's/^ *//' | sed 's/ *$//')
-                        send_response "{\"jsonrpc\":\"2.0\",\"id\":$json_id,\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"❌ $escaped_error\"}]}}"
+                        send_error_response "$json_id" "$escaped_error"
                     fi
                     ;;
                 "count_table_rows")
                     result=$(count_table_rows "$connection" "$table_name" "$database")
                     if [ $? -eq 0 ] && [[ ! "$result" =~ ^error: ]]; then
-                        send_response "{\"jsonrpc\":\"2.0\",\"id\":$json_id,\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"📊 Приблизительное количество строк в таблице '$table_name': $result\\n\\n💡 Примечание: Используется системный каталог PostgreSQL (pg_catalog.pg_class.reltuples) для быстрого подсчета. Значение приблизительное и обновляется после VACUUM/ANALYZE.\\n\\n🔧 Для точного подсчета выполните: ANALYZE $table_name; затем повторите запрос.\"}]}}"
+                        success_text="📊 Приблизительное количество строк в таблице '$table_name': $result
+
+💡 Примечание: Используется системный каталог PostgreSQL (pg_catalog.pg_class.reltuples) для быстрого подсчета. Значение приблизительное и обновляется после VACUUM/ANALYZE.
+
+🔧 Для точного подсчета выполните: ANALYZE $table_name; затем повторите запрос."
+                        send_success_response "$json_id" "$success_text"
                     else
                         # Улучшенное экранирование ошибок для JSON
                         escaped_error=$(echo "$result" | sed 's/\\/\\\\/g' | sed 's/"/\\"/g' | sed 's/\t/\\t/g' | sed 's/\r/\\r/g' | tr '\n' ' ' | sed 's/  */ /g' | sed 's/^ *//' | sed 's/ *$//')
-                        send_response "{\"jsonrpc\":\"2.0\",\"id\":$json_id,\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"❌ $escaped_error\"}]}}"
+                        send_error_response "$json_id" "$escaped_error"
                     fi
                     ;;
                 *)
-                    send_response "{\"jsonrpc\":\"2.0\",\"id\":$json_id,\"error\":{\"code\":-32601,\"message\":\"Unknown tool: $tool_name\"}}"
+                    # Ответ с ошибкой для неизвестного инструмента
+                    cat <<EOF
+{
+  "jsonrpc": "2.0",
+  "id": $json_id,
+  "error": {
+    "code": -32601,
+    "message": "Unknown tool: $tool_name"
+  }
+}
+EOF
                     ;;
             esac
             ;;
         *)
             if [ -n "$method" ]; then
-                send_response "{\"jsonrpc\":\"2.0\",\"id\":$json_id,\"error\":{\"code\":-32601,\"message\":\"Method not found: $method\"}}"
+                # Ответ с ошибкой для неизвестного метода
+                cat <<EOF
+{
+  "jsonrpc": "2.0",
+  "id": $json_id,
+  "error": {
+    "code": -32601,
+    "message": "Method not found: $method"
+  }
+}
+EOF
             fi
             ;;
     esac
