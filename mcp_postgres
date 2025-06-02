@@ -2,6 +2,16 @@
 
 # MCP PostgreSQL Server на bash + psql
 
+# Добавляем путь к PostgreSQL в PATH
+export PATH="/Applications/Postgres.app/Contents/Versions/latest/bin:$PATH"
+
+# Определяем полный путь к psql
+PSQL_PATH=$(which psql)
+if [ -z "$PSQL_PATH" ]; then
+    echo "Ошибка: psql не найден в системе" >&2
+    exit 1
+fi
+
 # Функция для загрузки переменных из .env файла
 load_env() {
     if [ -f .env ]; then
@@ -82,10 +92,23 @@ execute_sql() {
     fi
     
     # Выполняем запрос
-    if [ -n "$password" ]; then
-        PGPASSWORD="$password" psql -h "$host" -p "$port" -U "$user" -d "$dbname" -t -A -c "$query" 2>&1
+    # Проверяем наличие psql в разных местах
+    local psql_cmd=""
+    if [ -n "$PSQL_PATH" ] && [ -x "$PSQL_PATH" ]; then
+        psql_cmd="$PSQL_PATH"
+    elif command -v psql >/dev/null 2>&1; then
+        psql_cmd="psql"
+    elif [ -x "/Applications/Postgres.app/Contents/Versions/latest/bin/psql" ]; then
+        psql_cmd="/Applications/Postgres.app/Contents/Versions/latest/bin/psql"
     else
-        psql -h "$host" -p "$port" -U "$user" -d "$dbname" -t -A -c "$query" 2>&1
+        echo "psql не найден в системе"
+        return 1
+    fi
+    
+    if [ -n "$password" ]; then
+        PGPASSWORD="$password" "$psql_cmd" -h "$host" -p "$port" -U "$user" -d "$dbname" -t -A -c "$query" 2>&1
+    else
+        "$psql_cmd" -h "$host" -p "$port" -U "$user" -d "$dbname" -t -A -c "$query" 2>&1
     fi
 }
 
@@ -100,6 +123,30 @@ check_connection() {
         echo "ok"
     else
         echo "error: $result"
+    fi
+}
+
+# Функция для быстрого подсчета строк в таблице
+count_table_rows() {
+    local connection="$1"
+    local table_name="$2"
+    local database="$3"
+    local result
+    
+    # Запрос к системному каталогу для быстрого получения приблизительного количества строк
+    local query="SELECT reltuples::bigint as estimated_rows FROM pg_catalog.pg_class WHERE relname = '$table_name'"
+    result=$(execute_sql "$connection" "$query" "$database")
+    
+    if [ $? -eq 0 ]; then
+        if [ -z "$result" ] || [ "$result" = "" ]; then
+            echo "Таблица '$table_name' не найдена"
+            return 1
+        else
+            echo "$result"
+        fi
+    else
+        echo "error: $result"
+        return 1
     fi
 }
 
@@ -145,13 +192,14 @@ while IFS= read -r line; do
             
             security_desc="Режимы безопасности: local=$([ "$local_readonly" = "true" ] && echo "READONLY" || echo "FULL"), docker=$([ "$docker_readonly" = "true" ] && echo "READONLY" || echo "FULL"), prod=$([ "$prod_readonly" = "true" ] && echo "READONLY" || echo "FULL")."
             
-            send_response "{\"jsonrpc\":\"2.0\",\"id\":$json_id,\"result\":{\"tools\":[{\"name\":\"execute_sql\",\"description\":\"Выполнить SQL запрос через psql. $security_desc Использует нативный psql клиент PostgreSQL 16.0+. Реализация на bash без зависимостей - быстрая и надёжная.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"connection\":{\"type\":\"string\",\"description\":\"Имя соединения (local, docker, prod)\"},\"database\":{\"type\":\"string\",\"description\":\"Имя базы данных (опционально, переопределяет значение по умолчанию из .env)\"},\"query\":{\"type\":\"string\",\"description\":\"SQL запрос (поддерживается стандартный синтаксис PostgreSQL)\"}},\"required\":[\"connection\",\"query\"]}},{\"name\":\"check_connection\",\"description\":\"Проверить подключение к PostgreSQL серверу. Тестирует доступность сервера и базы данных через psql.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"connection\":{\"type\":\"string\",\"description\":\"Имя соединения (local, docker, prod)\"},\"database\":{\"type\":\"string\",\"description\":\"Имя базы данных для проверки (опционально)\"}},\"required\":[\"connection\"]}}]}}"
+            send_response "{\"jsonrpc\":\"2.0\",\"id\":$json_id,\"result\":{\"tools\":[{\"name\":\"execute_sql\",\"description\":\"Выполнить SQL запрос через psql. $security_desc Использует нативный psql клиент PostgreSQL 16.0+. Реализация на bash без зависимостей - быстрая и надёжная.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"connection\":{\"type\":\"string\",\"description\":\"Имя соединения (local, docker, prod)\"},\"database\":{\"type\":\"string\",\"description\":\"Имя базы данных (опционально, переопределяет значение по умолчанию из .env)\"},\"query\":{\"type\":\"string\",\"description\":\"SQL запрос (поддерживается стандартный синтаксис PostgreSQL)\"}},\"required\":[\"connection\",\"query\"]}},{\"name\":\"check_connection\",\"description\":\"Проверить подключение к PostgreSQL серверу. Тестирует доступность сервера и базы данных через psql.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"connection\":{\"type\":\"string\",\"description\":\"Имя соединения (local, docker, prod)\"},\"database\":{\"type\":\"string\",\"description\":\"Имя базы данных для проверки (опционально)\"}},\"required\":[\"connection\"]}},{\"name\":\"count_table_rows\",\"description\":\"Быстрый подсчет строк в таблице через системный каталог PostgreSQL (pg_catalog.pg_class). Возвращает приблизительное количество строк - значительно быстрее чем COUNT(*) для больших таблиц. Использует reltuples для оценки. Для точного подсчета рекомендуется предварительно выполнить ANALYZE table_name для обновления статистики.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"connection\":{\"type\":\"string\",\"description\":\"Имя соединения (local, docker, prod)\"},\"table_name\":{\"type\":\"string\",\"description\":\"Имя таблицы для подсчета строк\"},\"database\":{\"type\":\"string\",\"description\":\"Имя базы данных (опционально)\"}},\"required\":[\"connection\",\"table_name\"]}}]}}"
             ;;
         "tools/call")
             # Извлекаем имя инструмента и аргументы
             tool_name=$(echo "$line" | sed -n 's/.*"name":"\([^"]*\)".*/\1/p')
             connection=$(echo "$line" | sed -n 's/.*"connection":"\([^"]*\)".*/\1/p')
             database=$(echo "$line" | sed -n 's/.*"database":"\([^"]*\)".*/\1/p')
+            table_name=$(echo "$line" | sed -n 's/.*"table_name":"\([^"]*\)".*/\1/p')
             
             case "$tool_name" in
                 "execute_sql")
@@ -171,6 +219,16 @@ while IFS= read -r line; do
                     result=$(check_connection "$connection" "$database")
                     if [[ "$result" == "ok" ]]; then
                         send_response "{\"jsonrpc\":\"2.0\",\"id\":$json_id,\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"✅ Соединение работает\"}]}}"
+                    else
+                        # Улучшенное экранирование ошибок для JSON
+                        escaped_error=$(echo "$result" | sed 's/\\/\\\\/g' | sed 's/"/\\"/g' | sed 's/\t/\\t/g' | sed 's/\r/\\r/g' | tr '\n' ' ' | sed 's/  */ /g' | sed 's/^ *//' | sed 's/ *$//')
+                        send_response "{\"jsonrpc\":\"2.0\",\"id\":$json_id,\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"❌ $escaped_error\"}]}}"
+                    fi
+                    ;;
+                "count_table_rows")
+                    result=$(count_table_rows "$connection" "$table_name" "$database")
+                    if [ $? -eq 0 ] && [[ ! "$result" =~ ^error: ]]; then
+                        send_response "{\"jsonrpc\":\"2.0\",\"id\":$json_id,\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"📊 Приблизительное количество строк в таблице '$table_name': $result\\n\\n💡 Примечание: Используется системный каталог PostgreSQL (pg_catalog.pg_class.reltuples) для быстрого подсчета. Значение приблизительное и обновляется после VACUUM/ANALYZE.\"}]}}"
                     else
                         # Улучшенное экранирование ошибок для JSON
                         escaped_error=$(echo "$result" | sed 's/\\/\\\\/g' | sed 's/"/\\"/g' | sed 's/\t/\\t/g' | sed 's/\r/\\r/g' | tr '\n' ' ' | sed 's/  */ /g' | sed 's/^ *//' | sed 's/ *$//')

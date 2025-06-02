@@ -47,7 +47,6 @@ DB_LOCAL_HOST=localhost
 DB_LOCAL_PORT=5432
 DB_LOCAL_NAME=postgres
 DB_LOCAL_USER=postgres
-DB_LOCAL_PASSWORD=password
 DB_LOCAL_READONLY=false  # full access for development
 
 # Docker connection (testing)
